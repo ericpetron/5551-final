@@ -10,6 +10,7 @@ import pybullet_data
 import time
 import math
 
+
 # success.wav by grunz -- https://freesound.org/s/109662/ -- License: Attribution 3.0
 # Negative.wav by iwanPlays -- https://freesound.org/s/626085/ -- License: Creative Commons 0
     
@@ -20,7 +21,7 @@ class Simulation:
         self.ballId = 0
         self.red_ball = 0
         self.robot = 0
-        self.distFromGoal = 10
+        self.distFromGoal = 40
         self.startBallHeight = 0.2
         # targwidth is for the x of where the ball is placed.
         self.targWidth = 10
@@ -93,7 +94,13 @@ class Simulation:
         physicsClient = p.connect(p.GUI)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, -9.8)
-        
+        p.resetDebugVisualizerCamera(
+            cameraDistance=10,          # Zoom
+            cameraYaw=180,              # Left-right rotation (degrees)
+            cameraPitch=-5,           # Up-down angle (degrees)
+            cameraTargetPosition=[0, 0, 0]  # Where the camera looks
+        )
+
 
         # Create the setting
         plane_id = p.loadURDF("plane.urdf")
