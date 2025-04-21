@@ -20,6 +20,8 @@ import matplotlib.pyplot as plt
 
 class Simulation:
     def __init__(self):
+        self.timer = 0
+        
         self.offsetX = 0
         self.ballId = 0
         self.red_ball = 0
@@ -30,6 +32,7 @@ class Simulation:
         self.targWidth = 10
         self.physicsClient = 0
         self.leftCamera = 0
+        self.rightCamera = 0
         self.video = 0
         self.CVindex = 0
         
@@ -39,9 +42,13 @@ class Simulation:
         self.goal_depth = 3.5   
         self.post_radius = 0.1
         
+        self.centerPointOne = 0
+        self.centerPointTwo = 0
+        self.centerPointThree = 0
         
-        
-        
+        self.expected_calced = False
+        self.blue_ball = 0
+
         
     def getRandX(self):
         targWidth = 6.5
@@ -97,7 +104,7 @@ class Simulation:
             point_on_goal[2] - point_ball_start[2]
         ]
         ballVelo = self.normalize(ballVelo_to_be_norm)
-        print(ballVelo)
+        # print(ballVelo)
         # potentially scale velo
         for index in range(3):
             ballVelo[index] = float(ballVelo[index]) * 7
@@ -106,28 +113,40 @@ class Simulation:
         t = 1.0
         ballVelo = [(point_on_goal[0] - point_ball_start[0])/t, (point_on_goal[1] - point_ball_start[1])/t, (point_on_goal[2] - point_ball_start[2] + (0.5*9.8 * (t**2)))/t]
         p.resetBaseVelocity(self.ballId, linearVelocity=ballVelo, angularVelocity=[-60, 0, 0])
+    
+    # inspiration from https://youtu.be/VDBSH69uH7A?si=8W3odvU4Xx_0HbTx&t=257
+    # then solve system of equations
     def getEstBallLoc(self, points: n.ndarray):
-        print(points)
-        print(type(points))
+        # print(points)
+        # print(type(points))
         if len(points) > 4:
-            tmp = []
-            A = []
-            b = []
+            tmp_a = []
+            tmp_b = []
             base_point = points[0]
             bp_squared = n.dot(base_point,base_point)
-            for i in range(1, 4):
-                pi = points[i]
-                row = 2 * (pi - base_point)
-                A.append(row)
-                bi = n.dot(pi, pi) - bp_squared
-                b.append(bi)
+            for ele in points[1:]:
+                tmp_a.append(2 * (ele - base_point))
+                tmp_b.append(n.dot(ele,ele) - bp_squared)
+            np_A = n.array(tmp_a)
+            np_b = n.array(tmp_b)
             
-            center = n.linalg.solve(A, b)
-            print("actual")
-            print(p.getBasePositionAndOrientation(self.ballId))
+            # center is only relevant here.
+            center, _, _, _ = n.linalg.lstsq(np_A, np_b, rcond=None)
+            # print("actual")
+            # print(p.getBasePositionAndOrientation(self.ballId))
 
-            print("center:")
-            print(center)
+            # print("center:")
+            if type(self.centerPointOne) == int:
+                self.centerPointOne = center
+            elif type(self.centerPointTwo) == int:
+                self.centerPointTwo = center
+            elif type(self.centerPointThree) == int:
+                self.centerPointThree = center
+                self.calcExpectedVec()
+                
+            
+            # print(center)
+            
             
             
     def captureFrameCV(self):
@@ -139,27 +158,33 @@ class Simulation:
         mask = (seg == self.ballId)
         points = points[mask, :]
 
-        fig = plt.figure()
-        plt.imshow(seg)
+
         self.getEstBallLoc(points)
-        fig = plt.figure()
-        ax = fig.add_subplot(projection="3d")
-        ax.scatter(points[:, 0], points[:, 1], zs=points[:, 2])
-        ax.set_xlabel("x")
-        ax.set_ylabel("y")
-        ax.set_zlabel("z")
-        ax.set_aspect("equal")
-        plt.show()
+        
+        
+        
+        
+        # UNCOMMENT FOR VISUAL REPRESENTATION OF LIDAR
+        
+        # fig = plt.figure()
+        # ax = fig.add_subplot(projection="3d")
+        # ax.scatter(points[:, 0], points[:, 1], zs=points[:, 2])
+        # ax.set_xlabel("x")
+        # ax.set_ylabel("y")
+        # ax.set_zlabel("z")
+        # ax.set_aspect("equal")
+        # plt.show()
 
         
     def initSensors(self):
         # refed from https://github.com/adamheins/pyb_utils/blob/main/examples/camera_example.py
         
         self.leftCamera = pyb_utils.Camera.from_camera_position( 
-            camera_position=(self.goal_width / 2, 0, 2),
-            target_position=(0, self.distFromGoal, self.startBallHeight),
+            camera_position=(0, 0, self.goal_height),
+            target_position=(self.offsetX, self.distFromGoal, self.startBallHeight),
             near=0.1,
             far=100,
+            fov=10.,
             width=200,
             height=200,
         )
@@ -168,7 +193,41 @@ class Simulation:
         # save the frame
         # self.video = pyb_utils.camera.FrameRecorder(camera=self.leftCamera, fps=60)
 
+    def calcExpectedVec(self):
+        # make basis 0,0,0 as the cam isn't there.
+        path = 0
+        t1 = 1. / 240.
+        t2 = 2. / 240.
+    
+        g = n.array([0,0, -9.8])
+        v1 = (self.centerPointTwo - self.centerPointOne - 0.5 * g * t1**2) / t1
+        v2 = (self.centerPointThree - self.centerPointOne - 0.5 * g * t2**2) / t2
+        calc_init_velo = 0.5 * (v1 + v2)
+        t = (0 - self.centerPointOne[1]) / calc_init_velo[1]
         
+        
+        expected_location = n.array([
+            self.centerPointOne[0] + calc_init_velo[0] * t,
+            0,
+            (self.centerPointOne[2] + (calc_init_velo[2] * t)) + (0.5 * -9.8 * t**2)
+        ])
+        if self.blue_ball != 0:
+            p.removeBody(self.blue_ball)
+        self.blue_ball = p.createMultiBody(
+            baseMass=0,
+            baseVisualShapeIndex=p.createVisualShape(
+                shapeType=p.GEOM_SPHERE,
+                radius=0.11,
+                rgbaColor=[0, 0, 1, 1],
+            ),
+            
+            basePosition=expected_location,
+            baseOrientation=p.getQuaternionFromEuler([0, n.pi / 2, 0])
+
+        )  
+        self.expected_calced = True
+        
+            
     def setup_soccer_goal_environment(self):
         """
         Sets up a PyBullet environment with a plane and a basic soccer goal.
@@ -355,7 +414,7 @@ class Simulation:
         
         # Load a soccer ball
 
-        self.offsetX = self.getRandX()
+        self.offsetX = 0
         self.ballId = p.loadURDF("soccerball.urdf", [self.offsetX, self.distFromGoal, self.startBallHeight], globalScaling=0.22)
         
         self.randomVecAtGoal()
@@ -373,7 +432,7 @@ class Simulation:
         """
         
         keypressed = False
-        timer = time.time()
+        self.timer = time.time()
         try:
             while True:
                 
@@ -387,29 +446,37 @@ class Simulation:
                         time.sleep(1. / 240.)
                         p.stepSimulation()
                     
-                    
-                    timer = time.time()
+                    self.expected_calced = False
+                    self.centerPointOne = 0
+                    self.centerPointTwo = 0
+                    self.centerPointThree = 0
+                    self.timer = time.time()
 
-                    self.offsetX = self.getRandX()
+                    self.offsetX = 0
                     
                     self.randomVecAtGoal()
                 # TODO: KEEP TRACKER IN TERMINAL OF TRIALS ie: "succeed: 1, fail: 0"
-                # elif time.time() - timer > 3 and keypressed:
-                #     print("MISS")
-                #     timer = time.time()
+                elif time.time() - self.timer > 3 and keypressed:
+                    print("MISS")
+                    self.timer = time.time()
                     
-                #     # self.offsetX = self.getRandX()
+                    self.centerPointThree = 0
+                    self.centerPointOne = 0
+                    self.centerPointTwo = 0
+                    self.expected_calced = False                   
+                    # self.offsetX = self.getRandX()
                     
-                #     self.randomVecAtGoal()
-                # TODO: 
+                    self.randomVecAtGoal()
+                
                 if keypressed:
                     p.stepSimulation()
-                    self.captureFrameCV()
+                    if not self.expected_calced:
+                        self.captureFrameCV()
                 # insert checks here.
                 else:
                     if input() == "S":
                         keypressed = True
-                        timer = time.time()
+                        self.timer = time.time()
                 time.sleep(1. / 240.)
         except KeyboardInterrupt:
             print("Exiting simulation...")
