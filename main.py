@@ -9,7 +9,10 @@ import pybullet as p
 import pybullet_data
 import time
 import math
-
+from sensors import Sensor
+import pyb_utils
+import cv2 as cv
+import matplotlib.pyplot as plt
 
 # success.wav by grunz -- https://freesound.org/s/109662/ -- License: Attribution 3.0
 # Negative.wav by iwanPlays -- https://freesound.org/s/626085/ -- License: Creative Commons 0
@@ -21,12 +24,25 @@ class Simulation:
         self.ballId = 0
         self.red_ball = 0
         self.robot = 0
-        self.distFromGoal = 40
+        self.distFromGoal = 12
         self.startBallHeight = 0.2
         # targwidth is for the x of where the ball is placed.
         self.targWidth = 10
+        self.physicsClient = 0
+        self.leftCamera = 0
+        self.video = 0
+        self.CVindex = 0
         
-
+        
+        self.goal_width = 7.32  
+        self.goal_height = 2.44 
+        self.goal_depth = 3.5   
+        self.post_radius = 0.1
+        
+        
+        
+        
+        
     def getRandX(self):
         targWidth = 6.5
         return (n.random.rand() * targWidth) - (targWidth / 2)
@@ -50,10 +66,15 @@ class Simulation:
         # the robot should be able to block all of the shots on goal.
         # Therefore, the Z axis isn't set to the height of the goal.
         #p.resetBasePositionAndOrientation(ballId,posObj=[offsetX, self.distFromGoal, self.startBallHeight], ornObj=[0,0,0,0] )
+        # limiting goal to one spot.
+        self.offsetX = 0
         p.removeBody(self.ballId)
         self.ballId = p.loadURDF("soccerball.urdf", [self.offsetX, self.distFromGoal, self.startBallHeight], globalScaling=0.22)
         p.changeDynamics(self.ballId, linkIndex=-1, linearDamping=0, angularDamping=0, mass=0.000000001)
         point_on_goal = [(n.random.rand() * 6.9 ) - (6.9 / 2),0,(n.random.rand() * 2) + 0.2]
+        
+        
+        
         point_ball_start = [self.offsetX, self.distFromGoal, self.startBallHeight]
         if self.red_ball != 0:
             p.removeBody(self.red_ball)
@@ -85,13 +106,74 @@ class Simulation:
         t = 1.0
         ballVelo = [(point_on_goal[0] - point_ball_start[0])/t, (point_on_goal[1] - point_ball_start[1])/t, (point_on_goal[2] - point_ball_start[2] + (0.5*9.8 * (t**2)))/t]
         p.resetBaseVelocity(self.ballId, linearVelocity=ballVelo, angularVelocity=[-60, 0, 0])
+    def getEstBallLoc(self, points: n.ndarray):
+        print(points)
+        print(type(points))
+        if len(points) > 4:
+            tmp = []
+            A = []
+            b = []
+            base_point = points[0]
+            bp_squared = n.dot(base_point,base_point)
+            for i in range(1, 4):
+                pi = points[i]
+                row = 2 * (pi - base_point)
+                A.append(row)
+                bi = n.dot(pi, pi) - bp_squared
+                b.append(bi)
+            
+            center = n.linalg.solve(A, b)
+            print("actual")
+            print(p.getBasePositionAndOrientation(self.ballId))
 
+            print("center:")
+            print(center)
+            
+            
+    def captureFrameCV(self):
+        rgba, depth, seg = self.leftCamera.get_frame()
+        # generate point cloud
+        points = self.leftCamera.get_point_cloud(depth=depth)
 
+        # just get points on the ball
+        mask = (seg == self.ballId)
+        points = points[mask, :]
+
+        fig = plt.figure()
+        plt.imshow(seg)
+        self.getEstBallLoc(points)
+        fig = plt.figure()
+        ax = fig.add_subplot(projection="3d")
+        ax.scatter(points[:, 0], points[:, 1], zs=points[:, 2])
+        ax.set_xlabel("x")
+        ax.set_ylabel("y")
+        ax.set_zlabel("z")
+        ax.set_aspect("equal")
+        plt.show()
+
+        
+    def initSensors(self):
+        # refed from https://github.com/adamheins/pyb_utils/blob/main/examples/camera_example.py
+        
+        self.leftCamera = pyb_utils.Camera.from_camera_position( 
+            camera_position=(self.goal_width / 2, 0, 2),
+            target_position=(0, self.distFromGoal, self.startBallHeight),
+            near=0.1,
+            far=100,
+            width=200,
+            height=200,
+        )
+        
+
+        # save the frame
+        # self.video = pyb_utils.camera.FrameRecorder(camera=self.leftCamera, fps=60)
+
+        
     def setup_soccer_goal_environment(self):
         """
         Sets up a PyBullet environment with a plane and a basic soccer goal.
         """
-        physicsClient = p.connect(p.GUI)
+        self.physicsClient = p.connect(p.GUI)
         p.setAdditionalSearchPath(pybullet_data.getDataPath())
         p.setGravity(0, 0, -9.8)
         p.resetDebugVisualizerCamera(
@@ -108,10 +190,7 @@ class Simulation:
 
 
         # Define the goal dimensions
-        goal_width = 7.32  
-        goal_height = 2.44 
-        goal_depth = 3.5   
-        post_radius = 0.1 
+         
         field_visual = p.createVisualShape(
             p.GEOM_BOX,
             halfExtents=[70, 105, 0.01],
@@ -128,32 +207,32 @@ class Simulation:
             baseMass=0,
             baseVisualShapeIndex=p.createVisualShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                length=goal_height,
+                radius=self.post_radius,
+                length=self.goal_height,
                 rgbaColor=[1, 1, 1, 1]
             ),
             baseCollisionShapeIndex=p.createCollisionShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                height=goal_height
+                radius=self.post_radius,
+                height=self.goal_height
             ),
-            basePosition=[goal_width / 2, 0, goal_height / 2],
+            basePosition=[self.goal_width / 2, 0, self.goal_height / 2],
         )
 
         goalpost2Id = p.createMultiBody(
             baseMass=0,
             baseVisualShapeIndex=p.createVisualShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                length=goal_height,
+                radius=self.post_radius,
+                length=self.goal_height,
                 rgbaColor=[1, 1, 1, 1]
             ),
             baseCollisionShapeIndex=p.createCollisionShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                height=goal_height
+                radius=self.post_radius,
+                height=self.goal_height
             ),
-            basePosition=[-goal_width / 2, 0, goal_height / 2],
+            basePosition=[-self.goal_width / 2, 0, self.goal_height / 2],
         )
 
         
@@ -161,21 +240,21 @@ class Simulation:
             baseMass=0,
             baseVisualShapeIndex=p.createVisualShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                length=goal_width,
+                radius=self.post_radius,
+                length=self.goal_width,
                 rgbaColor=[1, 1, 1, 1],
             ),
             baseCollisionShapeIndex=p.createCollisionShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                height=goal_width,
+                radius=self.post_radius,
+                height=self.goal_width,
             ),
-            basePosition=[0, 0, goal_height],
+            basePosition=[0, 0, self.goal_height],
             baseOrientation=p.getQuaternionFromEuler([0, n.pi / 2, 0])
 
         )
-        backstop_width = goal_width
-        backstop_height = goal_height
+        backstop_width = self.goal_width
+        backstop_height = self.goal_height
         backstop_depth = 0.1
         backstopId = p.createMultiBody(
             baseMass=0,
@@ -188,7 +267,7 @@ class Simulation:
                 shapeType=p.GEOM_BOX,
                 halfExtents=[backstop_width / 2, backstop_depth / 2, backstop_height / 2],
             ),
-            basePosition=[0, -goal_depth / 2, goal_height / 2],
+            basePosition=[0, -self.goal_depth / 2, self.goal_height / 2],
             baseOrientation=p.getQuaternionFromEuler([0, n.pi, 0])
         )
         
@@ -196,28 +275,28 @@ class Simulation:
             baseMass=0,
             baseVisualShapeIndex=p.createVisualShape(
                 shapeType=p.GEOM_BOX,
-                halfExtents=[goal_width/8, backstop_depth / 2, backstop_height / 2],
+                halfExtents=[self.goal_width/8, backstop_depth / 2, backstop_height / 2],
                 rgbaColor=[0.8, 0.8, 0.8, 0.5]
             ),
             baseCollisionShapeIndex=p.createCollisionShape(
                 shapeType=p.GEOM_BOX,
-                halfExtents=[goal_width/8, backstop_depth / 2, backstop_height / 2],
+                halfExtents=[self.goal_width/8, backstop_depth / 2, backstop_height / 2],
             ),
-            basePosition=[(goal_depth + 0.2), -goal_depth / 4, goal_height / 2],
+            basePosition=[(self.goal_depth + 0.2), -self.goal_depth / 4, self.goal_height / 2],
             baseOrientation=p.getQuaternionFromEuler([0, 0, n.pi/2])
         )
         rightBackstopId = p.createMultiBody(
             baseMass=0,
             baseVisualShapeIndex=p.createVisualShape(
                 shapeType=p.GEOM_BOX,
-                halfExtents=[goal_width/8, backstop_depth / 2, backstop_height / 2],
+                halfExtents=[self.goal_width/8, backstop_depth / 2, backstop_height / 2],
                 rgbaColor=[0.8, 0.8, 0.8, 0.5]
             ),
             baseCollisionShapeIndex=p.createCollisionShape(
                 shapeType=p.GEOM_BOX,
-                halfExtents=[goal_width/8, backstop_depth / 2, backstop_height / 2],
+                halfExtents=[self.goal_width/8, backstop_depth / 2, backstop_height / 2],
             ),
-            basePosition=[-(goal_depth + 0.2), -goal_depth / 4, goal_height / 2],
+            basePosition=[-(self.goal_depth + 0.2), -self.goal_depth / 4, self.goal_height / 2],
             baseOrientation=p.getQuaternionFromEuler([0, 0, n.pi/2])
         )
         
@@ -225,16 +304,16 @@ class Simulation:
             baseMass=0,
             baseVisualShapeIndex=p.createVisualShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                length=goal_width/4,
+                radius=self.post_radius,
+                length=self.goal_width/4,
                 rgbaColor=[1, 1, 1, 1],
             ),
             baseCollisionShapeIndex=p.createCollisionShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                height=goal_width/4,
+                radius=self.post_radius,
+                height=self.goal_width/4,
             ),
-            basePosition=[goal_depth, -goal_depth / 4, goal_height],
+            basePosition=[self.goal_depth, -self.goal_depth / 4, self.goal_height],
             baseOrientation=p.getQuaternionFromEuler([n.pi/2, 0, 0])
 
         )
@@ -242,16 +321,16 @@ class Simulation:
             baseMass=0,
             baseVisualShapeIndex=p.createVisualShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                length=goal_width/4,
+                radius=self.post_radius,
+                length=self.goal_width/4,
                 rgbaColor=[1, 1, 1, 1],
             ),
             baseCollisionShapeIndex=p.createCollisionShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                height=goal_width/4,
+                radius=self.post_radius,
+                height=self.goal_width/4,
             ),
-            basePosition=[-goal_depth, -goal_depth / 4, goal_height],
+            basePosition=[-self.goal_depth, -self.goal_depth / 4, self.goal_height],
             baseOrientation=p.getQuaternionFromEuler([n.pi/2, 0, 0])
 
         )
@@ -260,16 +339,16 @@ class Simulation:
             baseMass=0,
             baseVisualShapeIndex=p.createVisualShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                length=goal_width,
+                radius=self.post_radius,
+                length=self.goal_width,
                 rgbaColor=[1, 1, 1, 1],
             ),
             baseCollisionShapeIndex=p.createCollisionShape(
                 shapeType=p.GEOM_CYLINDER,
-                radius=post_radius,
-                height=goal_width,
+                radius=self.post_radius,
+                height=self.goal_width,
             ),
-            basePosition=[0, -goal_depth / 2, goal_height],
+            basePosition=[0, -self.goal_depth / 2, self.goal_height],
             baseOrientation=p.getQuaternionFromEuler([0, n.pi / 2, 0])
 
         )
@@ -282,8 +361,8 @@ class Simulation:
         self.randomVecAtGoal()
         self.robot = p.loadURDF("robots/simple.urdf", [0,0,1])
         p.changeDynamics(self.robot, linkIndex=-1, mass=2000, restitution=0.8)
-
-        return physicsClient  # return the ID, so the user can use it
+        self.initSensors()
+        return self.physicsClient  # return the ID, so the user can use it
 
     def simulate_environment(self, physicsClient):
         """
@@ -315,16 +394,17 @@ class Simulation:
                     
                     self.randomVecAtGoal()
                 # TODO: KEEP TRACKER IN TERMINAL OF TRIALS ie: "succeed: 1, fail: 0"
-                elif time.time() - timer > 3 and keypressed:
-                    print("MISS")
-                    timer = time.time()
-
-                    self.offsetX = self.getRandX()
+                # elif time.time() - timer > 3 and keypressed:
+                #     print("MISS")
+                #     timer = time.time()
                     
-                    self.randomVecAtGoal()
+                #     # self.offsetX = self.getRandX()
+                    
+                #     self.randomVecAtGoal()
                 # TODO: 
                 if keypressed:
                     p.stepSimulation()
+                    self.captureFrameCV()
                 # insert checks here.
                 else:
                     if input() == "S":
