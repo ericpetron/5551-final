@@ -48,6 +48,8 @@ class Simulation:
         
         self.expected_calced = False
         self.blue_ball = 0
+        self.expected_location = None
+
 
         
     def getRandX(self):
@@ -204,6 +206,7 @@ class Simulation:
         v2 = (self.centerPointThree - self.centerPointOne - 0.5 * g * t2**2) / t2
         calc_init_velo = 0.5 * (v1 + v2)
         t = (0 - self.centerPointOne[1]) / calc_init_velo[1]
+
         
         
         expected_location = n.array([
@@ -211,6 +214,8 @@ class Simulation:
             0,
             (self.centerPointOne[2] + (calc_init_velo[2] * t)) + (0.5 * -9.8 * t**2)
         ])
+        self.expected_location = expected_location  # Save for base control
+
         if self.blue_ball != 0:
             p.removeBody(self.blue_ball)
         self.blue_ball = p.createMultiBody(
@@ -226,6 +231,57 @@ class Simulation:
 
         )  
         self.expected_calced = True
+
+    def reach_with_arms(self, target_pos):
+        if not hasattr(self, 'robot'):
+            return
+
+        joint_map = {p.getJointInfo(self.robot, i)[1].decode(): i for i in range(p.getNumJoints(self.robot))}
+        link_map = {p.getJointInfo(self.robot, i)[12].decode(): i for i in range(p.getNumJoints(self.robot))}
+
+        left_shoulder = joint_map.get("left_shoulder")
+        left_elbow = joint_map.get("left_elbow")
+        right_shoulder = joint_map.get("right_shoulder")
+        right_elbow = joint_map.get("right_elbow")
+        left_hand_link = link_map.get("left_hand")
+        right_hand_link = link_map.get("right_hand")
+
+        active_joints = [
+            i for i in range(p.getNumJoints(self.robot))
+            if p.getJointInfo(self.robot, i)[2] != p.JOINT_FIXED
+        ]
+
+        if None in [left_shoulder, left_elbow, right_shoulder, right_elbow, left_hand_link, right_hand_link]:
+            print("Missing joints or hand links.")
+            return
+
+        base_pos, _ = p.getBasePositionAndOrientation(self.robot)
+        rel_x = target_pos[0] - base_pos[0]
+
+        def apply_ik(ik_solution, joint_names):
+            joint_index_map = {j: i for i, j in enumerate(active_joints)}
+            for name in joint_names:
+                joint_id = joint_map[name]
+                if joint_id in joint_index_map:
+                    sol_idx = joint_index_map[joint_id]
+                    p.setJointMotorControl2(
+                        self.robot, joint_id, p.POSITION_CONTROL, targetPosition=ik_solution[sol_idx], force=100
+                    )
+
+        if rel_x < -0.2:
+            ik = p.calculateInverseKinematics(self.robot, right_hand_link, target_pos)
+            apply_ik(ik, ["right_shoulder", "right_elbow"])
+        elif rel_x > 0.2:
+            ik = p.calculateInverseKinematics(self.robot, left_hand_link, target_pos)
+            apply_ik(ik, ["left_shoulder", "left_elbow"])
+        else:
+            ik_l = p.calculateInverseKinematics(self.robot, left_hand_link, target_pos)
+            ik_r = p.calculateInverseKinematics(self.robot, right_hand_link, target_pos)
+            apply_ik(ik_l, ["left_shoulder", "left_elbow"])
+            apply_ik(ik_r, ["right_shoulder", "right_elbow"])
+
+
+
         
             
     def setup_soccer_goal_environment(self):
@@ -418,7 +474,7 @@ class Simulation:
         self.ballId = p.loadURDF("soccerball.urdf", [self.offsetX, self.distFromGoal, self.startBallHeight], globalScaling=0.22)
         
         self.randomVecAtGoal()
-        self.robot = p.loadURDF("robots/simple.urdf", [0,0,1])
+        self.robot = p.loadURDF("robots/simple.urdf", [0,0,0.6])
         p.changeDynamics(self.robot, linkIndex=-1, mass=2000, restitution=0.8)
         self.initSensors()
         return self.physicsClient  # return the ID, so the user can use it
@@ -472,6 +528,30 @@ class Simulation:
                     p.stepSimulation()
                     if not self.expected_calced:
                         self.captureFrameCV()
+                    else:
+                        # Move base to align with expected ball position on the x-axis
+                        if hasattr(self, 'expected_location'):
+                            target_x = self.expected_location[0]
+                            current_pos, current_orn = p.getBasePositionAndOrientation(self.robot)
+                            current_x = current_pos[0]
+
+                            # Limit how close the base can get to the target x (stop at ~1m away)
+                            distance = abs(target_x - current_x)
+                            approach_limit = 0.8  # stop when this close
+
+                            if distance > approach_limit:
+                                direction = (target_x - current_x) / distance
+                                step_size = 0.05
+                                new_x = current_x + step_size * direction
+                            else:
+                                new_x = current_x  # stay here and let the arms do the work
+
+                            new_pos = [new_x, current_pos[1], current_pos[2]]
+                            p.resetBasePositionAndOrientation(self.robot, new_pos, current_orn)
+                            self.reach_with_arms(self.expected_location)
+
+
+
                 # insert checks here.
                 else:
                     if input() == "S":

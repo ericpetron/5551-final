@@ -1,13 +1,12 @@
 **Installation**
 
-
 prereq: install pipenv
 
 https://pipenv.pypa.io/en/latest/installation.html
 
 This is for versioning.
 
-Once pipenv is installed, run 
+Once pipenv is installed, run
 ```pipenv install```
 in the project directory.
 
@@ -20,3 +19,4 @@ after the install. To run the code enter the venv with
 once you're in the venv then type
 ```python main.py```
 
+or you can just type
