@@ -50,7 +50,7 @@ class Simulation:
         self.blue_ball = 0
         self.expected_location = None
 
-
+        self.exportiter = 1
         
     def getRandX(self):
         targWidth = 6.5
@@ -117,6 +117,7 @@ class Simulation:
         p.resetBaseVelocity(self.ballId, linearVelocity=ballVelo, angularVelocity=[-60, 0, 0])
     
     # inspiration from https://youtu.be/VDBSH69uH7A?si=8W3odvU4Xx_0HbTx&t=257
+    # and https://en.wikipedia.org/wiki/Linear_least_squares
     # then solve system of equations
     def getEstBallLoc(self, points: n.ndarray):
         # print(points)
@@ -133,6 +134,7 @@ class Simulation:
             np_b = n.array(tmp_b)
             
             # center is only relevant here.
+            # least squares function from numpy to minimize loss
             center, _, _, _ = n.linalg.lstsq(np_A, np_b, rcond=None)
             # print("actual")
             # print(p.getBasePositionAndOrientation(self.ballId))
@@ -163,8 +165,8 @@ class Simulation:
 
         self.getEstBallLoc(points)
         
-        
-        
+        n.savetxt(f"results/file{self.exportiter}.txt", points,  delimiter=" ", fmt='%f')
+        self.exportiter += 1
         
         # UNCOMMENT FOR VISUAL REPRESENTATION OF LIDAR
         
